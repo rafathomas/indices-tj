@@ -25,8 +25,20 @@ export async function POST() {
 }
 function findAttachments(html: string): Attachment[] { return [...html.matchAll(/<a[^>]*href=["']([^"']+)["'][^>]*>([\s\S]*?)<\/a>/gi)].map((m) => ({ url: new URL(m[1].replace(/&amp;/g, "&"), SOURCE).href, name: m[2].replace(/<[^>]+>/g, "").replace(/\s+/g, " ").trim() })).filter((x) => /FileFetch|\.pdf/i.test(x.url) && x.name.length > 1); }
 async function valuesForCurrentYear(buffer: ArrayBuffer): Promise<number[]> {
-  const raw = new Uint8Array(buffer); const text = new TextDecoder("latin1").decode(raw); const chunks = [text];
-  for (const match of text.matchAll(/stream\r?\n([\s\S]*?)\r?\nendstream/g)) { const bytes = Uint8Array.from(match[1], (c) => c.charCodeAt(0)); for (const format of ["deflate", "deflate-raw"] as const) { try { chunks.push(new TextDecoder("latin1").decode(await new Response(new Blob([bytes]).stream().pipeThrough(new DecompressionStream(format))).arrayBuffer())); break; } catch { /* next */ } } }
-  const normalized = chunks.join("\n").replace(/\\([()\\])/g, "$1").replace(/\s+/g, " "); const row = normalized.match(new RegExp(`(?:^|\\s)${YEAR}\\s+(.{1,500}?)(?:\\s+${YEAR}(?:\\s|$)|$)`));
+  const text = new TextDecoder("latin1").decode(buffer); const chunks = [text];
+  for (const match of text.matchAll(/stream\r?\n([\s\S]*?)\r?\nendstream/g)) { const bytes = Uint8Array.from(match[1], (c) => c.charCodeAt(0)); for (const format of ["deflate", "deflate-raw"] as const) { try { chunks.push(new TextDecoder("latin1").decode(await new Response(new Blob([bytes]).stream().pipeThrough(new DecompressionStream(format))).arrayBuffer())); break; } catch { /* try the alternate stream format */ } } }
+  const normalized = chunks.map(pdfText).join("\n").replace(/\s+/g, " "); const row = normalized.match(new RegExp(`(?:^|\\s)${YEAR}\\s+(.{1,500}?)(?:\\s+${YEAR}(?:\\s|$)|$)`));
   return row ? [...row[1].matchAll(/-?\d{1,3}(?:[.,]\d{1,4})?\s*%/g)].map((m) => Number(m[0].replace("%", "").replace(".", "").replace(",", "."))).filter(Number.isFinite).slice(0, 12) : [];
+}
+
+// PDFs from the TJSP use kerning arrays such as [(0)-10(,)6(2)-10(0)-10(%)] TJ.
+// Joining the literal fragments restores the visible value (0,20%) before matching a year row.
+function pdfText(content: string) {
+  let output = "";
+  for (const operation of content.matchAll(/\[([\s\S]*?)\]\s*TJ|\((?:\\.|[^\\)])*\)\s*Tj/g)) {
+    const fragments = operation[1] ?? operation[0];
+    for (const fragment of fragments.matchAll(/\(((?:\\.|[^\\)])*)\)/g)) output += fragment[1].replace(/\\([()\\])/g, "$1");
+    output += " ";
+  }
+  return output;
 }
